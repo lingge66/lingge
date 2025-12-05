@@ -1,0 +1,533 @@
+// ==UserScript==
+// @name         Twitter/X Pro 全能情报终端 (CTO领哥版)
+// @namespace    https://github.com/LingGe-CTO/Twitter-Alpha-Hunter
+// @version      9.0
+// @description  1.智能翻译 2.动态VIP高亮 3.CA透视 4.备注系统 5.可视化设置。支持 X Pro (TweetDeck)。
+// @author       LingGe
+// @license      MIT
+// @match        https://twitter.com/*
+// @match        https://x.com/*
+// @match        https://pro.twitter.com/*
+// @match        https://pro.x.com/*
+// @match        https://tweetdeck.twitter.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=twitter.com
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// ==/UserScript==
+// ==UserScript==
+// @name         Twitter/X Pro 全能情报终端 (CTO领哥版 V9.0)
+// @namespace    http://tampermonkey.net/
+// @version      9.0
+// @description  1.智能翻译 2.动态VIP高亮 3.CA透视 4.备注系统 5.可视化设置
+// @author       LingGe
+// @match        https://twitter.com/*
+// @match        https://x.com/*
+// @match        https://pro.twitter.com/*
+// @match        https://pro.x.com/*
+// @match        https://tweetdeck.twitter.com/*
+// @icon         https://www.google.com/s2/favicons?sz=64&domain=twitter.com
+// @grant        GM_xmlhttpRequest
+// @grant        GM_addStyle
+// @grant        GM_setValue
+// @grant        GM_getValue
+// @grant        GM_registerMenuCommand
+// ==/UserScript==
+
+(function() {
+    'use strict';
+
+    console.log("🚀 领哥情报终端 V9.0 (自定义版) 已启动...");
+
+    const TARGET_LANG = 'zh-CN';
+
+    // ================= 0. 默认数据与迁移 =================
+    const DEFAULT_CONFIG = {
+        transColor: '#00E676',
+        transFontSize: '14px',
+        noteColor: '#1D9BF0',
+        noteFontSize: '11px',
+        vipBorderColor: '#F3BA2F'
+    };
+
+    // 内置初始 VIP 名单 (仅在首次运行时写入存储)
+    const INITIAL_VIP_MAP = {
+        'vitalikbuterin': ['🏛️ ETH创始人', '#716b94', '#fff'],
+        'cz_binance': ['🔶 币安创始人', '#F0B90B', '#000'],
+        'elonmusk': ['🚀 狗狗教父', '#000000', '#fff'],
+        'brian_armstrong': ['🛡️ Coinbase CEO', '#0052FF', '#fff'],
+        'aeyakovenko': ['🟣 Solana创始人', '#9945FF', '#fff'],
+        'cryptohayes': ['📝 Arthur Hayes', '#444', '#fff'],
+        'zachxbt': ['🚨 链上侦探', '#FF0000', '#fff'],
+        'a16z': ['💰 a16z', '#FF6600', '#fff'],
+        'paradigm': ['🧠 Paradigm', '#000', '#fff']
+    };
+
+    // ================= 1. 存储管理模块 =================
+    const Storage = {
+        // 配置
+        getConfig: () => ({ ...DEFAULT_CONFIG, ...JSON.parse(GM_getValue('ling_config', '{}')) }),
+        setConfig: (cfg) => GM_setValue('ling_config', JSON.stringify(cfg)),
+
+        // 备注
+        getNotes: () => JSON.parse(GM_getValue('ling_user_notes', '{}')),
+        setNotes: (notes) => GM_setValue('ling_user_notes', JSON.stringify(notes)),
+        addNote: (handle, note) => {
+            const notes = Storage.getNotes();
+            if (note && note.trim()) notes[handle.toLowerCase()] = note.trim();
+            else delete notes[handle.toLowerCase()];
+            Storage.setNotes(notes);
+        },
+        getNote: (handle) => Storage.getNotes()[handle.toLowerCase()] || null,
+
+        // VIP 名单 (动态)
+        getVips: () => {
+            let vips = JSON.parse(GM_getValue('ling_vips', 'null'));
+            if (!vips) {
+                vips = INITIAL_VIP_MAP;
+                GM_setValue('ling_vips', JSON.stringify(vips));
+            }
+            return vips;
+        },
+        setVips: (vips) => GM_setValue('ling_vips', JSON.stringify(vips)),
+        addVip: (handle, label, bgColor = '#F3BA2F', textColor = '#000') => {
+            const vips = Storage.getVips();
+            vips[handle.toLowerCase()] = [label, bgColor, textColor];
+            Storage.setVips(vips);
+        },
+        removeVip: (handle) => {
+            const vips = Storage.getVips();
+            delete vips[handle.toLowerCase()];
+            Storage.setVips(vips);
+        },
+        isVip: (handle) => {
+            const vips = Storage.getVips();
+            return vips[handle.toLowerCase()];
+        },
+
+        // 导出备份
+        export: () => {
+            const data = {
+                notes: Storage.getNotes(),
+                vips: Storage.getVips(),
+                config: Storage.getConfig()
+            };
+            const blob = new Blob([JSON.stringify(data)], {type: 'application/json'});
+            const url = URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `ling_data_backup_${new Date().toISOString().slice(0,10)}.json`;
+            a.click();
+        },
+
+        // 导入备份
+        import: () => {
+            const input = document.createElement('input');
+            input.type = 'file';
+            input.accept = '.json,.txt';
+            input.onchange = (e) => {
+                const file = e.target.files[0];
+                const reader = new FileReader();
+                reader.onload = (event) => {
+                    try {
+                        const rawData = JSON.parse(event.target.result);
+                        
+                        // 兼容旧版备注导入
+                        if (rawData['$myTwitterNoteItems']) {
+                            const items = rawData['$myTwitterNoteItems'];
+                            const notes = Storage.getNotes();
+                            for (let key in items) {
+                                if (items[key]?.tag) notes[key.toLowerCase()] = items[key].tag;
+                            }
+                            Storage.setNotes(notes);
+                            alert("✅ 旧版备注导入成功！");
+                        } 
+                        // 新版全量导入
+                        else if (rawData.notes || rawData.vips) {
+                            if(rawData.notes) Storage.setNotes({ ...Storage.getNotes(), ...rawData.notes });
+                            if(rawData.vips) Storage.setVips({ ...Storage.getVips(), ...rawData.vips });
+                            if(rawData.config) Storage.setConfig({ ...Storage.getConfig(), ...rawData.config });
+                            alert("✅ 全量数据导入成功！");
+                        }
+                        location.reload();
+                    } catch (err) {
+                        alert('❌ 导入失败：文件格式错误');
+                    }
+                };
+                reader.readAsText(file);
+            };
+            input.click();
+        }
+    };
+
+    // ================= 2. 动态样式注入 =================
+    function updateStyles() {
+        const cfg = Storage.getConfig();
+        // 移除旧样式（如果有）
+        const oldStyle = document.getElementById('ling-dynamic-style');
+        if (oldStyle) oldStyle.remove();
+
+        const css = `
+            /* VIP 推文高亮 */
+            .ling-vip-tweet {
+                border: 2px solid ${cfg.vipBorderColor} !important;
+                background: rgba(243, 186, 47, 0.05) !important;
+                border-radius: 8px !important;
+            }
+            /* 身份铭牌 */
+            .ling-identity-badge {
+                font-weight: 900; font-size: 10px;
+                padding: 1px 4px; border-radius: 3px; margin-left: 5px;
+                vertical-align: middle; display: inline-block;
+                box-shadow: 0 1px 2px rgba(0,0,0,0.5);
+            }
+            
+            /* 翻译框 */
+            .ling-trans-box {
+                margin-top: 6px; padding: 8px 10px;
+                background-color: #000;
+                border: 1px solid ${cfg.transColor};
+                border-left: 4px solid ${cfg.transColor};
+                border-radius: 4px;
+                color: ${cfg.transColor} !important;
+                font-size: ${cfg.transFontSize};
+                line-height: 1.5;
+                font-family: "Consolas", "Microsoft YaHei", monospace;
+            }
+            
+            /* CA 链接 */
+            .ling-ca-link {
+                color: #F3BA2F !important; font-weight: bold;
+                text-decoration: none; cursor: pointer;
+                background: rgba(243, 186, 47, 0.15);
+                padding: 0 4px; border-radius: 3px;
+            }
+            .ling-ca-link:hover { background: rgba(243, 186, 47, 0.3); text-decoration: underline; }
+
+            /* 工具栏按钮 */
+            .ling-action-btn {
+                cursor: pointer; margin-left: 6px; 
+                font-size: 14px; vertical-align: middle;
+                display: inline-block; transition: all 0.2s;
+                opacity: 0.5; filter: grayscale(100%);
+            }
+            .ling-action-btn:hover { opacity: 1; filter: grayscale(0%); transform: scale(1.2); }
+            .ling-action-btn.active { opacity: 1; filter: grayscale(0%); text-shadow: 0 0 5px gold; }
+
+            /* 用户备注标签 */
+            .ling-user-note {
+                background-color: ${cfg.noteColor};
+                color: #fff; 
+                font-size: ${cfg.noteFontSize};
+                padding: 2px 6px; border-radius: 4px; 
+                margin-left: 5px; vertical-align: middle; display: inline-block;
+                cursor: pointer; max-width: 150px; white-space: nowrap; 
+                overflow: hidden; text-overflow: ellipsis; font-weight: bold;
+            }
+            
+            /* 设置面板 */
+            #ling-settings-overlay {
+                position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+                background: rgba(0,0,0,0.7); z-index: 9999;
+                display: flex; justify-content: center; align-items: center;
+            }
+            #ling-settings-box {
+                background: #16181c; border: 1px solid #333; border-radius: 12px;
+                padding: 20px; width: 350px; color: #fff; font-family: sans-serif;
+                box-shadow: 0 0 20px rgba(0,0,0,0.8);
+            }
+            .ling-setting-row { margin-bottom: 15px; display: flex; justify-content: space-between; align-items: center; }
+            .ling-setting-row label { font-size: 14px; color: #ccc; }
+            .ling-setting-row input { background: #333; border: 1px solid #555; color: #fff; padding: 4px; border-radius: 4px; }
+            .ling-btn-primary {
+                background: #00E676; color: #000; border: none; padding: 8px 15px;
+                border-radius: 20px; font-weight: bold; cursor: pointer; width: 100%;
+            }
+        `;
+        
+        const styleNode = document.createElement('style');
+        styleNode.id = 'ling-dynamic-style';
+        styleNode.innerHTML = css;
+        document.head.appendChild(styleNode);
+    }
+
+    // ================= 3. UI 交互逻辑 =================
+
+    // 打开设置面板
+    function openSettings() {
+        if (document.getElementById('ling-settings-overlay')) return;
+        
+        const cfg = Storage.getConfig();
+        const div = document.createElement('div');
+        div.id = 'ling-settings-overlay';
+        div.innerHTML = `
+            <div id="ling-settings-box">
+                <h3 style="margin:0 0 20px 0; color:#F3BA2F; text-align:center;">⚙️ 领哥终端设置</h3>
+                
+                <div class="ling-setting-row">
+                    <label>翻译文字颜色</label>
+                    <input type="color" id="cfg-transColor" value="${cfg.transColor}">
+                </div>
+                <div class="ling-setting-row">
+                    <label>翻译字号 (如 14px)</label>
+                    <input type="text" id="cfg-transFontSize" value="${cfg.transFontSize}" style="width:60px;">
+                </div>
+                <hr style="border-color:#333; margin:15px 0;">
+                <div class="ling-setting-row">
+                    <label>备注背景颜色</label>
+                    <input type="color" id="cfg-noteColor" value="${cfg.noteColor}">
+                </div>
+                <div class="ling-setting-row">
+                    <label>备注字号</label>
+                    <input type="text" id="cfg-noteFontSize" value="${cfg.noteFontSize}" style="width:60px;">
+                </div>
+                <hr style="border-color:#333; margin:15px 0;">
+                <div class="ling-setting-row">
+                    <label>VIP 高亮框颜色</label>
+                    <input type="color" id="cfg-vipBorderColor" value="${cfg.vipBorderColor}">
+                </div>
+
+                <div style="margin-top:20px; display:flex; gap:10px;">
+                    <button class="ling-btn-primary" id="ling-save-btn">保存并应用</button>
+                    <button class="ling-btn-primary" id="ling-close-btn" style="background:#333; color:#fff;">关闭</button>
+                </div>
+            </div>
+        `;
+        document.body.appendChild(div);
+
+        document.getElementById('ling-close-btn').onclick = () => div.remove();
+        document.getElementById('ling-save-btn').onclick = () => {
+            const newCfg = {
+                transColor: document.getElementById('cfg-transColor').value,
+                transFontSize: document.getElementById('cfg-transFontSize').value,
+                noteColor: document.getElementById('cfg-noteColor').value,
+                noteFontSize: document.getElementById('cfg-noteFontSize').value,
+                vipBorderColor: document.getElementById('cfg-vipBorderColor').value
+            };
+            Storage.setConfig(newCfg);
+            updateStyles(); // 立即刷新样式
+            div.remove();
+        };
+    }
+
+    // 注册菜单
+    GM_registerMenuCommand("⚙️ 插件设置", openSettings);
+    GM_registerMenuCommand("📤 导出数据备份", Storage.export);
+    GM_registerMenuCommand("📥 导入数据备份", Storage.import);
+
+    // ================= 4. 业务逻辑 =================
+
+    // 翻译
+    function translateText(element, text) {
+        if (!text || text.trim().length === 0) return;
+        if (/[\u4e00-\u9fa5]/.test(text)) return;
+        if (element.dataset.lingTranslating === "true" || element.dataset.lingTranslated === "true") return;
+        
+        element.dataset.lingTranslating = "true";
+        const apiUrl = `https://translate.googleapis.com/translate_a/single?client=gtx&sl=auto&tl=${TARGET_LANG}&dt=t&q=${encodeURIComponent(text)}`;
+
+        GM_xmlhttpRequest({
+            method: "GET", url: apiUrl,
+            onload: function(response) {
+                try {
+                    const data = JSON.parse(response.responseText);
+                    let result = "";
+                    if (data && data[0]) data[0].forEach(item => { if (item[0]) result += item[0]; });
+                    
+                    if (result) {
+                        if (element.parentNode.querySelector('.ling-trans-box')) return;
+                        const transDiv = document.createElement('div');
+                        transDiv.className = 'ling-trans-box';
+                        
+                        // CA 识别
+                        let processedHtml = result;
+                        processedHtml = processedHtml.replace(/\b([1-9A-HJ-NP-Za-km-z]{32,44})\b/g, (match) => 
+                            `<a href="https://gmgn.ai/sol/token/${match}" target="_blank" class="ling-ca-link">[SOL: ${match.slice(0,4)}..]</a>`
+                        );
+                        processedHtml = processedHtml.replace(/\b(0x[a-fA-F0-9]{40})\b/g, (match) => 
+                            `<a href="https://gmgn.ai/eth/token/${match}" target="_blank" class="ling-ca-link">[ETH: ${match.slice(0,4)}..]</a>`
+                        );
+
+                        // 🔥 品牌更新
+                        transDiv.innerHTML = `<span style="opacity:0.7; font-size:12px;">[🤖 领哥AI译]</span><br>${processedHtml}`;
+                        element.parentNode.appendChild(transDiv);
+                        element.dataset.lingTranslated = "true";
+                    }
+                } catch (e) {}
+                delete element.dataset.lingTranslating;
+            }
+        });
+    }
+
+    // 更新备注显示 (无感刷新)
+    function updateNoteUI(handle, container, newNote) {
+        const oldSpan = container.querySelector('.ling-user-note');
+        if (oldSpan) oldSpan.remove();
+
+        if (newNote) {
+            const span = document.createElement('span');
+            span.className = 'ling-user-note';
+            span.innerText = newNote;
+            span.title = "点击修改";
+            span.onclick = (e) => { e.preventDefault(); e.stopPropagation(); triggerNoteEdit(handle, container); };
+            
+            const btn = container.querySelector('.ling-note-btn');
+            if (btn) container.insertBefore(span, btn);
+            else container.appendChild(span);
+        }
+    }
+
+    function triggerNoteEdit(handle, container) {
+        const oldNote = Storage.getNote(handle) || "";
+        const newNote = prompt(`📝 为 @${handle} 设置备注:`, oldNote);
+        if (newNote !== null) {
+            Storage.addNote(handle, newNote);
+            updateNoteUI(handle, container, newNote);
+        }
+    }
+
+    // 更新 VIP 状态 (动态添加/删除)
+    function toggleVip(handle, container) {
+        const isVip = Storage.isVip(handle);
+        if (isVip) {
+            if (confirm(`⚠️ 确定取消 @${handle} 的重点关注吗？`)) {
+                Storage.removeVip(handle);
+                // 移除 UI 上的标记 (简单重载或移除类)
+                const badge = container.querySelector('.ling-identity-badge');
+                if(badge) badge.remove();
+                const tweet = container.closest('article');
+                if(tweet) tweet.classList.remove('ling-vip-tweet');
+                // 更新星星状态
+                updateToolBar(handle, container);
+            }
+        } else {
+            const label = prompt(`🔥 将 @${handle} 设为重点关注！\n请输入身份标签 (如: 顶级VC, 土狗王):`, "重点关注");
+            if (label) {
+                Storage.addVip(handle, label);
+                location.reload(); // VIP状态改变涉及高亮框，刷新页面效果最好
+            }
+        }
+    }
+
+    // 注入工具栏 (铅笔 + 星星)
+    function updateToolBar(handle, container) {
+        if (container.querySelector('.ling-toolbar-injected')) return;
+        
+        const wrapper = document.createElement('span');
+        wrapper.className = 'ling-toolbar-injected';
+
+        // 1. 备注按钮 ✏️
+        const noteBtn = document.createElement('span');
+        noteBtn.className = 'ling-action-btn ling-note-btn';
+        noteBtn.innerHTML = '✏️';
+        noteBtn.title = '备注';
+        noteBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); triggerNoteEdit(handle, container); };
+        
+        // 2. VIP 按钮 ⭐
+        const vipBtn = document.createElement('span');
+        const isVip = Storage.isVip(handle);
+        vipBtn.className = `ling-action-btn ${isVip ? 'active' : ''}`;
+        vipBtn.innerHTML = '⭐';
+        vipBtn.title = isVip ? '取消重点关注' : '设为重点关注';
+        vipBtn.onclick = (e) => { e.preventDefault(); e.stopPropagation(); toggleVip(handle, container); };
+
+        wrapper.appendChild(noteBtn);
+        wrapper.appendChild(vipBtn);
+        container.appendChild(wrapper);
+
+        // 初始化显示备注
+        const note = Storage.getNote(handle);
+        if (note) updateNoteUI(handle, container, note);
+    }
+
+    // 主处理
+    function processArticle(article) {
+        if (article.dataset.lingProcessed === "true") return;
+        
+        let userHandle = '';
+        let nameContainer = null;
+
+        const links = article.querySelectorAll('a[href*="/"]');
+        for (let link of links) {
+            const href = link.getAttribute('href');
+            if (href && href.length > 1 && !href.includes('/status/') && !href.includes('/hashtag/')) {
+                const handle = href.replace('/', '').toLowerCase();
+                if (/^[a-z0-9_]{1,20}$/.test(handle)) {
+                    const userNameDiv = article.querySelector('div[data-testid="User-Name"]');
+                    if (userNameDiv) {
+                        if (link.innerText.length > 0) { 
+                             userHandle = handle;
+                             nameContainer = link.querySelector('div[dir="ltr"]') || link;
+                             break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (userHandle && nameContainer) {
+            // 注入工具栏
+            updateToolBar(userHandle, nameContainer);
+
+            // VIP 高亮逻辑
+            const vipInfo = Storage.isVip(userHandle);
+            if (vipInfo) {
+                article.classList.add('ling-vip-tweet');
+                const [label, bgColor, textColor] = vipInfo;
+                if (!nameContainer.parentNode.querySelector('.ling-identity-badge')) {
+                    const badge = document.createElement('span');
+                    badge.className = 'ling-identity-badge';
+                    badge.innerText = label;
+                    badge.style.backgroundColor = bgColor;
+                    badge.style.color = textColor;
+                    nameContainer.appendChild(badge);
+                }
+            }
+        }
+
+        // 翻译
+        let textContainer = article.querySelector('div[data-testid="tweetText"]');
+        if (!textContainer && window.location.hostname.includes('tweetdeck')) {
+            textContainer = article.querySelector('.tweet-text');
+        }
+        if (textContainer) {
+            article.dataset.lingProcessed = "true";
+            setTimeout(() => {
+                translateText(textContainer, textContainer.innerText);
+            }, 800);
+        }
+    }
+
+    // 初始化
+    updateStyles(); // 应用初始样式
+    
+    const observer = new MutationObserver((mutations) => {
+        let articlesToProcess = [];
+        mutations.forEach(mutation => {
+            mutation.addedNodes.forEach(node => {
+                if (node.nodeType === 1) {
+                    if (node.tagName === 'ARTICLE') articlesToProcess.push(node);
+                    else if (node.querySelectorAll) {
+                        node.querySelectorAll('article').forEach(a => articlesToProcess.push(a));
+                    }
+                }
+            });
+        });
+        if (articlesToProcess.length > 0) articlesToProcess.forEach(processArticle);
+    });
+
+    const startObserver = () => {
+        const body = document.querySelector('body');
+        if (body) {
+            document.querySelectorAll('article').forEach(processArticle);
+            observer.observe(body, { childList: true, subtree: true });
+        } else {
+            setTimeout(startObserver, 500);
+        }
+    };
+
+    setTimeout(startObserver, 1500);
+
+})();
